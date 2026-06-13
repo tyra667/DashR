@@ -1,0 +1,1153 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Celeste — Prairie</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;min-height:100%;background:#0f1f0f;}
+#gc{width:100%;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#0f1f0f;padding:10px 0;}
+#center-col{display:flex;flex-direction:column;align-items:center;flex:0 0 auto;}
+#hud{display:flex;gap:12px;margin-bottom:8px;font-family:'Courier New',monospace;font-size:13px;color:#e0e0e0;align-items:center;}
+#hud span{background:rgba(0,0,0,0.45);padding:3px 12px;border-radius:20px;border:1px solid rgba(255,255,255,0.12);}
+#ctrl{margin-top:8px;font-family:'Courier New',monospace;font-size:11px;color:#556655;display:flex;gap:12px;flex-wrap:wrap;justify-content:center;}
+#ctrl kbd{background:rgba(255,255,255,0.06);border:1px solid #334433;border-radius:3px;padding:1px 5px;color:#778877;}
+canvas{display:block;image-rendering:pixelated;image-rendering:crisp-edges;cursor:none;}
+</style>
+</head>
+<body>
+<div id="gc">
+  <div id="center-col">
+      <div id="hud">
+        <span id="lvl-hud">Niveau 1</span>
+        <span>⏱ <span id="timer">0.00</span>s</span>
+        <span>🏆 <span id="best">--</span>s</span>
+        <span>💀 <span id="deaths">0</span></span>
+      </div>
+      <canvas id="c"></canvas>
+      <div id="ctrl">
+        <span><kbd>←</kbd><kbd>→</kbd> Déplacer</span>
+        <span><kbd>Z</kbd>/<kbd>Espace</kbd> Sauter</span>
+        <span><kbd>X</kbd> Dash</span>
+        <span><kbd>Espace</kbd>+mur Wall-jump</span>
+        <span><kbd>R</kbd> Restart</span>
+      </div>
+  </div>
+</div>
+<script>
+const C=document.getElementById('c');
+const ctx=C.getContext('2d');
+const BASE_W=640,BASE_H=420;
+let W=BASE_W,H=BASE_H,SCALE=1;
+function resize(){
+  const sw=window.innerWidth/BASE_W,sh=window.innerHeight/BASE_H;
+  SCALE=Math.min(sw,sh);W=BASE_W;H=BASE_H;
+  C.width=BASE_W;C.height=BASE_H;
+  C.style.width=Math.round(BASE_W*SCALE)+'px';C.style.height=Math.round(BASE_H*SCALE)+'px';
+}
+resize();window.addEventListener('resize',resize);
+const T=16;
+
+// ── Audio ──────────────────────────────────────────────────────────
+const AudioCtx=window.AudioContext||window.webkitAudioContext;
+let aCtx=null;
+function getACtx(){if(!aCtx){try{aCtx=new AudioCtx();}catch(e){}}return aCtx;}
+function playTone(freq,type,dur,vol,startFreq){
+  const a=getACtx();if(!a)return;
+  const o=a.createOscillator(),g=a.createGain();
+  o.connect(g);g.connect(a.destination);
+  o.type=type||'square';
+  if(startFreq){o.frequency.setValueAtTime(startFreq,a.currentTime);o.frequency.exponentialRampToValueAtTime(freq,a.currentTime+dur*0.5);}
+  else o.frequency.setValueAtTime(freq,a.currentTime);
+  g.gain.setValueAtTime((vol||0.12),a.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001,a.currentTime+dur);
+  o.start();o.stop(a.currentTime+dur);
+}
+function sfxJump(){playTone(320,'square',0.12,0.1,180);}
+function sfxDash(){playTone(600,'sawtooth',0.15,0.08,900);}
+function sfxDie(){playTone(80,'sawtooth',0.3,0.12,200);}
+function sfxWin(){[523,659,784,1047].forEach((f,i)=>setTimeout(()=>playTone(f,'square',0.2,0.1),i*100));}
+function sfxWallJump(){playTone(280,'square',0.1,0.08,220);}
+function sfxNextLevel(){[392,523,659].forEach((f,i)=>setTimeout(()=>playTone(f,'square',0.18,0.09),i*120));}
+
+// ── RNG ───────────────────────────────────────────────────────────
+function mulberry32(a){
+  let s=a;
+  return function(){
+    s+=0x6D2B79F5;let t=s;
+    t=Math.imul(t^t>>>15,t|1);t^=t+Math.imul(t^t>>>7,t|61);
+    return((t^t>>>14)>>>0)/4294967296;
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════
+// ── DÉFINITION DES NIVEAUX ────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════
+const LEVEL_DEFS=[
+  // ── NIVEAU 1 ─────────────────────────────────────────────────────
+  {
+    name:'Niveau 1 : La Prairie',
+    map:[
+      "                                        ",
+      "                                        ",
+      "                         S  G           ",
+      "                        TTTTTTTT        ",
+      "                                        ",
+      "           S  TT                        ",
+      "          TTTTTTT      TTTTTTTTTTTT     ",
+      "       TTTTTTTTTT                       ",
+      "     TTTTTTTTTTTTTT      TTTT           ",
+      "                     TTTTTTTTTT         ",
+      "  TTTT           S S                    ",
+      " TTTTTTT       TTTTT                    ",
+      " TTTTTTTTT                 TTTTTTT      ",
+      " TTTTTTTTTTTTTTTTTTTT  TTTTTTTTTTTTTTT  ",
+      "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+      "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+    ],
+    playerStart:{col:10,row:11},
+    movPlats:[
+      {ox:22*T,oy:4*T,x:22*T,y:4*T,w:3*T,h:T,range:4*T,speed:0.6,dir:1,axis:'x'},
+    ],
+    enemies:[],
+  },
+  // ── NIVEAU 2 ─────────────────────────────────────────────────────
+  {
+    name:'Niveau 2 : La Prairie Hostile',
+    map:[
+      "                                        ",
+      "                                        ",
+      "                                        ",
+      "                           S     G      ",
+      "            S             TTT   TTT     ",
+      "       S    TT          TTTT            ",
+      "      TTTTTTTT                          ",
+      "   T                                    ",
+      "                  TTTT       TTTT       ",
+      "            S  S                        ",
+      "  TTTT     TTTTTTT                      ",
+      "  TTTTTTT              TTTTTTTTTTTT     ",
+      "  TTTTTTTTTTTTTT   TTTTTTTTTTTTTTTTTTT  ",
+      "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+      "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+      "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+      "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+    ],
+    playerStart:{col:3,row:10},
+    movPlats:[
+      // plateforme horizontale rapide au milieu
+      {ox:18*T,oy:6*T,x:18*T,y:6*T,w:3*T,h:T,range:5*T,speed:1.1,dir:1,axis:'x'},
+    ],
+    enemies:[
+      // Garde patrouillant sur la grande plateforme du bas (row 12)
+      {x:10*T, y:12*T-10, w:8, h:10, ox:10*T, range:5*T, speed:1.0, dir:1, facingRight:true},
+      // Garde plus rapide sur la section de droite
+      {x:26*T, y:11*T-10, w:8, h:10, ox:26*T, range:6*T, speed:1.0, dir:1, facingRight:true},
+    ],
+  },
+  // ── NIVEAU 3 ─────────────────────────────────────────────────────
+  {
+    name:'Niveau 3 : La Prairie vertigineuse',
+    map:[
+      "                                        ",
+      "                                        ",
+      "    TT                            TTT   ",
+      "                                        ",
+      "               TT                       ",
+      "                                        ",
+      "                                        ",
+      "    TT                                  ",
+      "                                 TTS    ",
+      "                                TTTTT   ",
+      "                                        ",
+      "                                        ",
+      "                                        ",
+      "                       SSS SS           ",
+      "                       TTT TT           ",
+      "                                        ",
+      "                                        ",
+      "                     S S        SSSSS   ",
+      "                     TTT        TTTTT   ",
+      "                                        ",
+      "              T                   G     ",
+      "      T                   T      TTT    ",
+      "                  T                     ",
+    ],
+    playerStart:{col:5,row:2},
+    movPlats:[],
+    enemies:[],
+  },
+    // ── NIVEAU 4 ─────────────────────────────────────────────────────
+  {
+    name:'Niveau 4 : La Prairie ...',
+    map:[
+      "                                        ",
+      "                                        ",
+      "                G                       ",
+      "         T     TTT                      ",
+      "         T                              ",
+      "         T                 TTT          ",
+      "         T            S                 ",
+      "         TTTTTTT     TT                 ",
+      "                                        ",
+      "                                        ",
+      "                                        ",
+      "                                        ",
+      "                                        ",
+      "                                        ",
+      "                                        ",
+      "                                        ",
+      "                  TTTTTTTT              ",
+      "                                        ",
+      "                                        ",
+      "             TTTTTTTT          TTT      ",
+      "         TTTTTTTTTTTTTTT     TTTTT      ",
+      "   TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT   ",
+    ],
+    playerStart:{col:5,row:20},
+    movPlats:[
+      // plateforme verticale rapide au milieu
+      {ox:28*T,oy:10*T,x:28*T,y:10*T,w:3*T,h:T,range:5*T,speed:1.1,dir:1,axis:'y'},
+      // plateforme verticale rapide au milieu
+      {ox:34*T,oy:5*T,x:34*T,y:5*T,w:3*T,h:T,range:8*T,speed:1.6,dir:1,axis:'y'},
+    ],
+    enemies:[
+      {x:18*T, y:16*T-10, w:8, h:10, ox:18*T, range:7*T, speed:1.2, dir:1, facingRight:true},
+    ],
+  },
+    // ── NIVEAU 5 ─────────────────────────────────────────────────────
+  {
+    name:'Niveau 5 : La Prairie serpentueuse',
+    map:[
+      "                                     G  ",
+      "                                     T  ",
+      "         S   S    S     S       S   TT  ",
+      "     TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT  ",
+      "   T                                    ",
+      "   TT     S        S     S      S       ",
+      "   TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT     ",
+      "                                     T  ",
+      "         S        S            S    TT  ",
+      "     TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT  ",
+      "   T                                    ",
+      "   TT     S      S          S           ",
+      "   TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT     ",
+      "                                     T  ",
+      "            S         S         S   TT  ",
+      "     TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT  ",
+      "   T                                    ",
+      "   TT   S                     S         ",
+      "   TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT     ",
+      "                                     T  ",
+      "            S               S       TT  ",
+      "   TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT  ",
+    ],
+    playerStart:{col:4,row:20},
+    movPlats:[],
+    enemies:[
+      {x:6*T, y:3*T-10, w:8, h:10, ox:6*T, range:29*T, speed:2.2, dir:1, facingRight:true},
+      {x:6*T, y:9*T-10, w:8, h:10, ox:6*T, range:29*T, speed:2.0, dir:1, facingRight:true},
+      {x:6*T, y:15*T-10, w:8, h:10, ox:6*T, range:29*T, speed:1.8, dir:1, facingRight:true},
+      {x:4*T, y:21*T-10, w:8, h:10, ox:6*T, range:28*T, speed:1.6, dir:1, facingRight:true},
+
+      {x:7*T, y:6*T-10, w:8, h:10, ox:6*T, range:29*T, speed:2.1, dir:1, facingRight:true},
+      {x:7*T, y:12*T-10, w:8, h:10, ox:6*T, range:29*T, speed:1.9, dir:1, facingRight:true},
+      {x:7*T, y:18*T-10, w:8, h:10, ox:6*T, range:28*T, speed:1.7, dir:1, facingRight:true},
+    ],
+  },
+    // ── NIVEAU 6 ─────────────────────────────────────────────────────
+  {
+    name:'Niveau 6 : Les Cavernes de Fer',
+    theme:'cavern',
+    map:[
+      "                                        ",
+      "                                        ",
+      "                                        ",
+      "                                        ",
+      "                                        ",
+      "                                        ",
+      "                            S   G       ",
+      "            S               TTTTTTTT   ",
+      "    TTTTTTTTTT                          ",
+      "                                  S     ",
+      "               S     S         TTTTT    ",
+      "            TTTTTTTTTTTT                ",
+      "        S                      S   S    ",
+      "     TTTTTTTTTT      S    TTTTTTTTTT    ",
+      "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+      "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+    ],
+    playerStart:{col:10,row:11},
+    movPlats:[],
+    enemies:[
+      {x:4*T, y:8*T-10, w:8, h:10, ox:4*T, range:10*T, speed:1.5, dir:1, facingRight:true},
+      {x:13*T, y:11*T-10, w:8, h:10, ox:13*T, range:10*T, speed:1.5, dir:1, facingRight:true},
+    ],
+  },
+  // ── NIVEAU 7 ─────────────────────────────────────────────────────
+  {
+    name:'Niveau 7 : Les Cavernes avec des portails',
+    theme:'cavern',
+    map:[
+      "                                        ",
+      "                                  A     ",
+      "                                        ",
+      "                                        ",
+      "                                  S     ",
+      "                                  T     ",
+      "                            S   G       ",
+      "        A   S               TTTTTTTT    ",
+      "    TTTTTTTTTT                          ",
+      "                                        ",
+      "                     S                  ",
+      "            TTTTTTTTTTTT                ",
+      "        S                      S   S    ",
+      "     TTTTTTTTTT      S    TTTTTTTTTT    ",
+      "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+      "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+    ],
+    playerStart:{col:10,row:11},
+    movPlats:[],
+    enemies:[
+      {x:4*T, y:8*T-10, w:8, h:10, ox:4*T, range:10*T, speed:1.5, dir:1, facingRight:true},
+      {x:13*T, y:11*T-10, w:8, h:10, ox:13*T, range:10*T, speed:1.5, dir:1, facingRight:true},
+    ],
+  },
+
+];
+
+// ══════════════════════════════════════════════════════════════════
+// ── ÉTAT GLOBAL ───────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════
+let currentLevelIdx=0;
+let currentTheme='prairie';
+let LEVEL,COLS,ROWS,movPlats,spikes,goalPos,enemies,portals;
+let DECO=[],CLOUD_DATA=[],TREES=[];
+let state='title',player,particles=[],deaths=0,startTime=0,elapsed=0;
+let bestTimes=new Array(LEVEL_DEFS.length).fill(null);
+let camera={x:0,y:0},cloudOffset=0;
+
+function getTile(c,r){
+  if(r<0||r>=ROWS)return false;
+  const l=LEVEL[r]||'';
+  if(c<0||c>=l.length)return false;
+  return l[c]==='T';
+}
+
+function loadLevel(idx){
+  currentLevelIdx=idx;
+  const def=LEVEL_DEFS[idx];
+  currentTheme=def.theme||'prairie';
+  LEVEL=def.map;
+  COLS=40;ROWS=LEVEL.length;
+  // Deep-copy plateformes pour réinitialisation propre (champs optionnels)
+  movPlats=(def.movPlats||[]).map(p=>({...p,x:p.ox,y:p.oy}));
+  enemies=(def.enemies||[]).map(e=>({...e,x:e.ox,y:e.y}));
+  // Parse S, G et portails (toute lettre A-Z hors T/S/G = identifiant de portail)
+  spikes=[];goalPos=null;
+  const portalGroups={};
+  for(let r=0;r<ROWS;r++)for(let c=0;c<(LEVEL[r]||'').length;c++){
+    const ch=LEVEL[r][c];
+    if(ch==='S')spikes.push({x:c*T,y:r*T,w:T,h:T});
+    else if(ch==='G')goalPos={x:c*T+4,y:r*T,w:8,h:T};
+    else if(/[A-Z]/.test(ch)&&ch!=='T'){
+      (portalGroups[ch]=portalGroups[ch]||[]).push({x:c*T,y:r*T});
+    }
+  }
+  // Construit la liste des portails, chacun lié à son partenaire (même lettre)
+  portals=[];
+  for(const id in portalGroups){
+    const pts=portalGroups[id];
+    for(let i=0;i<pts.length;i++){
+      const partner=pts[i%2===0?i+1:i-1];
+      if(!partner)continue;
+      portals.push({x:pts[i].x,y:pts[i].y,w:T,h:T,id,target:partner});
+    }
+  }
+  // Rebuild deco & arbres
+  DECO=[];CLOUD_DATA=[];TREES=[];
+  buildDeco();buildTrees();
+  // HUD
+  document.getElementById('lvl-hud').textContent=def.name.split(':')[0];
+  const bt=bestTimes[idx]||null;
+  document.getElementById('best').textContent=bt!==null?bt.toFixed(2):'--';
+}
+
+function buildDeco(){
+  if(currentTheme==='cavern'){buildDecoCavern();return;}
+  const rng=mulberry32(0xDEADBEEF+currentLevelIdx*0x1234);
+  for(let r=0;r<ROWS;r++){
+    for(let c=0;c<(LEVEL[r]||'').length;c++){
+      if(LEVEL[r][c]==='T'&&!getTile(c,r-1)){
+        const v=rng();
+        if(v<0.18)DECO.push({type:'grass',x:c*T+Math.floor(rng()*12)+2,y:r*T,h:2+Math.floor(rng()*4),c:rng()<0.5?'#5dba4a':'#7ed957'});
+        else if(v<0.26){const petals=['#ff6fa8','#ffb347','#fff176','#b3e5fc'];DECO.push({type:'flower',x:c*T+Math.floor(rng()*12)+2,y:r*T,col:petals[Math.floor(rng()*petals.length)]});}
+        else if(v<0.30)DECO.push({type:'rock',x:c*T+Math.floor(rng()*10)+2,y:r*T});
+      }
+    }
+  }
+  const cr=mulberry32(0xC0FFEE42+currentLevelIdx*0x5678);
+  for(let i=0;i<8;i++)CLOUD_DATA.push({x:cr()*COLS*T,y:20+cr()*120,w:40+cr()*60,h:16+cr()*20,spd:0.1+cr()*0.2,alpha:0.55+cr()*0.3});
+}
+
+// ── Décoration thème caverne (minerais : fer, rubis, émeraude, saphir) ──
+const ORE_COLORS={
+  iron:  {main:'#c9ccd6', dark:'#8b8f9c', glow:'#f0f0f0'},
+  ruby:  {main:'#ffffff', dark:'#9a9a9a', glow:'#ffffff'},
+  emerald:{main:'#7a7a7a', dark:'#3a3a3a', glow:'#cfcfcf'},
+  sapphire:{main:'#bdbdbd', dark:'#4a4a4a', glow:'#e8e8e8'},
+};
+function buildDecoCavern(){
+  const rng=mulberry32(0xCAFEBABE+currentLevelIdx*0x4321);
+  const oreKeys=Object.keys(ORE_COLORS);
+  for(let r=0;r<ROWS;r++){
+    for(let c=0;c<(LEVEL[r]||'').length;c++){
+      if(LEVEL[r][c]!=='T')continue;
+      const above=getTile(c,r-1);
+      if(!above){
+        // surface exposée vers le haut → stalagmite ou cristal de minerai qui pousse
+        const v=rng();
+        if(v<0.14){
+          DECO.push({type:'stalagmite',x:c*T+Math.floor(rng()*8)+2,y:r*T,h:3+Math.floor(rng()*5)});
+        } else if(v<0.24){
+          const ore=oreKeys[Math.floor(rng()*oreKeys.length)];
+          DECO.push({type:'gem_top',x:c*T+Math.floor(rng()*10)+3,y:r*T,ore});
+        }
+      } else {
+        // bloc intérieur → veine de minerai incrustée (occasionnelle)
+        const v=rng();
+        if(v<0.16){
+          const ore=oreKeys[Math.floor(rng()*oreKeys.length)];
+          DECO.push({type:'ore_vein',x:c*T+2+Math.floor(rng()*8),y:r*T+2+Math.floor(rng()*8),ore});
+        }
+      }
+    }
+  }
+  // Particules de poussière lumineuse flottante (remplace les nuages)
+  const cr=mulberry32(0xB10B10B0+currentLevelIdx*0x2468);
+  const glowColors=['#7ecfff','#b388ff','#ffd76e','#7fffc9'];
+  for(let i=0;i<10;i++){
+    CLOUD_DATA.push({
+      x:cr()*COLS*T,y:10+cr()*(ROWS*T-20),
+      w:1.5+cr()*2,h:0,spd:0.05+cr()*0.15,
+      alpha:0.4+cr()*0.4,col:glowColors[Math.floor(cr()*glowColors.length)]
+    });
+  }
+}
+
+function buildTrees(){
+  if(currentTheme==='cavern'){TREES=[];return;}
+  const rng=mulberry32(0xA1B2C3D4+currentLevelIdx*0x9ABC);
+  // Colonnes candidates (espacées pour ne pas surcharger)
+  const xCandidates=[1,4,8,15,22,28,34,37];
+  xCandidates.forEach(col=>{
+    // Trouver la première ligne solide dans cette colonne
+    let groundRow=-1;
+    for(let r=0;r<ROWS;r++){
+      if(getTile(col,r)&&!getTile(col,r-1)){groundRow=r;break;}
+    }
+    if(groundRow<0)return; // aucun sol trouvé → pas d'arbre
+    // Ne placer l'arbre que si la surface est continue sur 2 tuiles (évite les petites plateformes)
+    if(!getTile(col+1,groundRow))return;
+    const bx=col*T;
+    const by=groundRow*T; // sommet du bloc de sol
+    TREES.push({x:bx,y:by,trunk:20+rng()*12,crown:14+rng()*10});
+  });
+}
+
+// ── Player ────────────────────────────────────────────────────────
+function initPlayer(){
+  const def=LEVEL_DEFS[currentLevelIdx];
+  player={
+    x:def.playerStart.col*T, y:def.playerStart.row*T,
+    vx:0,vy:0,w:8,h:10,
+    onGround:false,onWall:0,
+    canDash:true,dashing:false,dashTimer:0,dashVx:0,dashVy:0,
+    facingRight:true,coyote:0,jumpBuffer:0,wallJumpLock:0,
+    canWallJump:true,
+    dead:false,deathTimer:0,standingOn:null,teleportCooldown:0,
+  };
+}
+
+function collidesRect(ax,ay,aw,ah,bx,by,bw,bh){return ax<bx+bw&&ax+aw>bx&&ay<by+bh&&ay+ah>by;}
+function collidesWithTiles(nx,ny,w,h){
+  const l=Math.floor(nx/T),r=Math.floor((nx+w-1)/T);
+  const t=Math.floor(ny/T),b=Math.floor((ny+h-1)/T);
+  for(let rr=t;rr<=b;rr++)for(let cc=l;cc<=r;cc++)if(getTile(cc,rr))return true;
+  return false;
+}
+
+function spawnParticles(x,y,colors,n,vs=1){
+  for(let i=0;i<n;i++){
+    const a=Math.random()*Math.PI*2;
+    particles.push({x,y,
+      vx:Math.cos(a)*(1+Math.random()*2)*vs,
+      vy:Math.sin(a)*(1+Math.random()*2)*vs,
+      life:20+Math.random()*20,maxLife:40,
+      color:Array.isArray(colors)?colors[Math.floor(Math.random()*colors.length)]:colors,
+      r:1.5+Math.random()*2
+    });
+  }
+}
+
+// ── Inputs ────────────────────────────────────────────────────────
+const keys={};
+let jumpPressed=false,dashPressed=false;
+window.addEventListener('keydown',e=>{
+  if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Space','KeyZ','KeyX','KeyR','KeyA','KeyD','KeyW','KeyS'].includes(e.code))e.preventDefault();
+  if(!keys[e.code]){
+    if(e.code==='KeyZ'||e.code==='Space')jumpPressed=true;
+    if(e.code==='KeyX')dashPressed=true;
+    if(e.code==='KeyR'){if(state==='playing'||state==='dead'||state==='won'||state==='levelwon')startGame();}
+    if(e.code==='Space'||e.code==='KeyZ'){
+      if(state==='title')startGame();
+      if(state==='won')startGame();
+      if(state==='levelwon')nextLevel();
+    }
+  }
+  keys[e.code]=true;
+});
+window.addEventListener('keyup',e=>{keys[e.code]=false;});
+
+function startGame(){
+  state='playing';
+  loadLevel(currentLevelIdx);
+  initPlayer();
+  particles=[];
+  startTime=performance.now();
+  elapsed=0;
+  camera={x:0,y:0};
+}
+
+function nextLevel(){
+  const next=currentLevelIdx+1;
+  if(next>=LEVEL_DEFS.length){state='won';return;}
+  currentLevelIdx=next;
+  state='playing';
+  loadLevel(currentLevelIdx);
+  initPlayer();
+  particles=[];
+  startTime=performance.now();
+  elapsed=0;
+  camera={x:0,y:0};
+}
+
+function startDash(){
+  const dx=(keys['ArrowRight']||keys['KeyD'])?1:(keys['ArrowLeft']||keys['KeyA'])?-1:(player.facingRight?1:-1);
+  const dy=(keys['ArrowUp']||keys['KeyW'])?-1:(keys['ArrowDown']||keys['KeyS'])?1:0;
+  const len=Math.sqrt(dx*dx+dy*dy);
+  player.dashVx=(dx/len)*5.5;
+  player.dashVy=dy!==0?(dy/len)*5.5:0;
+  player.dashing=true;player.dashTimer=12;
+  player.canDash=false;player.vx=0;player.vy=0;
+  sfxDash();
+  spawnParticles(player.x+4,player.y+5,'#ff9f43',10);
+}
+
+// ── Update ennemis ────────────────────────────────────────────────
+function updateEnemies(){
+  for(const e of enemies){
+    e.x+=e.speed*e.dir;
+    if(e.x>e.ox+e.range){e.x=e.ox+e.range;e.dir=-1;e.facingRight=false;}
+    if(e.x<e.ox){e.x=e.ox;e.dir=1;e.facingRight=true;}
+  }
+}
+
+// ── Update principal ──────────────────────────────────────────────
+function update(){
+  particles.forEach(p=>{p.x+=p.vx;p.y+=p.vy;p.vy+=0.08;p.vx*=0.97;p.life--;});
+  for(let i=particles.length-1;i>=0;i--)if(particles[i].life<=0)particles.splice(i,1);
+  cloudOffset+=0.15;
+
+  movPlats.forEach(mp=>{
+    if(mp.axis==='x'){mp.x+=mp.speed*mp.dir;if(mp.x>mp.ox+mp.range||mp.x<mp.ox)mp.dir*=-1;}
+    else{mp.y+=mp.speed*mp.dir;if(mp.y>mp.oy+(mp.range||2*T)||mp.y<mp.oy)mp.dir*=-1;}
+  });
+
+  if(state==='title'||state==='won'||state==='levelwon')return;
+
+  elapsed=(performance.now()-startTime)/1000;
+  document.getElementById('timer').textContent=elapsed.toFixed(2);
+
+  if(state==='dead'){
+    if(player.deathTimer>0)player.deathTimer--;
+    else{deaths++;document.getElementById('deaths').textContent=deaths;startGame();}
+    return;
+  }
+
+  if(player.dead){state='dead';player.deathTimer=30;sfxDie();spawnParticles(player.x+4,player.y+5,['#e94560','#ff9f43','#fff'],20,2);return;}
+
+  updateEnemies();
+
+  if(player.coyote>0)player.coyote--;
+  if(player.jumpBuffer>0)player.jumpBuffer--;
+  if(player.wallJumpLock>0)player.wallJumpLock--;
+
+  if(!player.dashing){
+    const goLeft=keys['ArrowLeft']||keys['KeyA'];
+    const goRight=keys['ArrowRight']||keys['KeyD'];
+    if(player.wallJumpLock<=0){
+      if(goLeft){player.vx-=0.5;player.facingRight=false;}
+      else if(goRight){player.vx+=0.5;player.facingRight=true;}
+      else{player.vx*=0.75;if(Math.abs(player.vx)<0.05)player.vx=0;}
+      player.vx=Math.max(-2.4,Math.min(2.4,player.vx));
+      if(player.onWall===1&&player.vx>0)player.vx=0;
+      if(player.onWall===-1&&player.vx<0)player.vx=0;
+    }
+    // Gravité : renforcée seulement une fois que la descente est amorcée
+    const grav=player.vy>1.5?0.55:0.32;
+    player.vy+=grav;
+    if(player.vy>7)player.vy=7;
+  } else {
+    player.dashTimer--;
+    player.vx=player.dashVx;player.vy=player.dashVy;
+    if(player.dashTimer<=0){player.dashing=false;player.vx*=0.5;player.vy*=0.3;}
+  }
+
+  if(jumpPressed){jumpPressed=false;player.jumpBuffer=8;}
+  if(dashPressed){dashPressed=false;if(player.canDash&&!player.dashing)startDash();}
+
+  const wasOnGround=player.onGround;
+  let nx=player.x+player.vx;
+  let ny=player.y+player.vy;
+  let touchWallLeft=false,touchWallRight=false;
+
+  if(collidesWithTiles(nx,player.y,player.w,player.h)){
+    if(player.vx>=0){nx=Math.ceil(player.x/T)*T-player.w;touchWallRight=true;}
+    else{nx=Math.floor((player.x+player.w)/T)*T;touchWallLeft=true;}
+    player.vx=0;
+  }
+
+  player.onGround=false;player.standingOn=null;
+
+  if(collidesWithTiles(nx,ny,player.w,player.h)){
+    if(player.vy>0){
+      ny=Math.ceil(player.y/T)*T-player.h;
+      player.onGround=true;player.canDash=true;player.coyote=6;player.canWallJump=true;
+    } else {
+      ny=Math.floor(ny/T)*T+T;
+      player.vy=0;
+    }
+  }
+
+  for(const mp of movPlats){
+    // Résolution axe X (même logique que les blocs rigides)
+    if(collidesRect(nx,player.y,player.w,player.h,mp.x,mp.y,mp.w,mp.h)){
+      if(player.x+player.w<=mp.x+mp.w*0.5){nx=mp.x-player.w;touchWallRight=true;}
+      else{nx=mp.x+mp.w;touchWallLeft=true;}
+      player.vx=0;if(player.dashing){player.dashVx=0;}
+    }
+    // Résolution axe Y
+    if(collidesRect(nx,ny,player.w,player.h,mp.x,mp.y,mp.w,mp.h)){
+      // Vient d'en haut si les pieds du joueur étaient au-dessus du centre de la plateforme
+      const fromAbove=player.y+player.h<=mp.y+mp.h*0.5;
+      if(fromAbove){
+        // Atterrissage sur le dessus — seulement si espace libre (pas de bloc rigide au-dessus)
+        const landY=mp.y-player.h;
+        if(!collidesWithTiles(nx,landY,player.w,player.h)){
+          ny=landY;player.onGround=true;player.canDash=true;player.coyote=6;player.canWallJump=true;
+          player.standingOn=mp;player.vy=0;
+          if(player.dashing){player.dashing=false;player.dashVx=0;player.dashVy=0;player.vx*=0.4;}
+        }
+      } else {
+        // Vient d'en dessous : plafond
+        ny=mp.y+mp.h;player.vy=0;
+      }
+    }
+  }
+
+  // Porter le joueur avec la plateforme
+  if(player.standingOn){
+    const mp=player.standingOn;
+    nx+=mp.axis==='x'?mp.speed*mp.dir:0;
+    ny+=mp.axis==='y'?mp.speed*mp.dir:0;
+  }
+  player.onWall=touchWallLeft?-1:touchWallRight?1:0;
+  if(wasOnGround&&!player.onGround&&!player.dashing)player.coyote=6;
+
+  if(!player.dashing&&Math.abs(player.vx)>0.5&&player.onGround&&Math.random()<0.3)
+    spawnParticles(nx+4,ny+player.h,['#4a4a4a','#5e5e5e','#3a3a3a'],2,0.25);
+
+  if(player.jumpBuffer>0&&(player.onGround||player.coyote>0)){
+    player.vy=-5.2;player.onGround=false;player.coyote=0;player.jumpBuffer=0;
+    sfxJump();spawnParticles(nx+4,ny+player.h,['#fff','#5e5e5e'],6,0.5);
+  } else if(player.jumpBuffer>0&&player.onWall!==0&&!player.onGround&&player.canWallJump){
+    player.vy=-5.0;player.vx=player.onWall<0?3.5:-3.5;
+    player.wallJumpLock=12;player.canDash=true;player.jumpBuffer=0;player.canWallJump=false;
+    sfxWallJump();
+    spawnParticles(nx+(player.onWall<0?0:player.w),ny+4,'#fff',8,0.8);
+  }
+
+  player.x=nx;player.y=ny;
+
+  if(player.y>H+60){player.dead=true;return;}
+  for(const s of spikes)if(collidesRect(player.x,player.y,player.w,player.h,s.x,s.y,s.w,s.h)){player.dead=true;return;}
+  for(const e of enemies)if(collidesRect(player.x,player.y,player.w,player.h,e.x,e.y,e.w,e.h)){player.dead=true;return;}
+
+  if(player.teleportCooldown>0)player.teleportCooldown--;
+  if(player.teleportCooldown<=0){
+    for(const p of portals){
+      if(collidesRect(player.x,player.y,player.w,player.h,p.x,p.y,p.w,p.h)){
+        spawnParticles(player.x+4,player.y+5,['#8a6cff','#4d7cff','#000000'],14,1.2);
+        player.x=p.target.x+(T-player.w)/2;
+        player.y=p.target.y+(T-player.h)/2;
+        player.teleportCooldown=20;
+        spawnParticles(player.x+4,player.y+5,['#8a6cff','#4d7cff','#000000'],14,1.2);
+        camera.x=Math.max(0,Math.min(COLS*T-W,player.x-W/2));
+        camera.y=Math.max(0,Math.min(ROWS*T-H,player.y-H*0.45));
+        break;
+      }
+    }
+  }
+
+  if(goalPos&&collidesRect(player.x,player.y,player.w,player.h,goalPos.x,goalPos.y,goalPos.w,goalPos.h)){
+    const isLast=currentLevelIdx>=LEVEL_DEFS.length-1;
+    state=isLast?'won':'levelwon';
+    sfxWin();
+    spawnParticles(player.x+4,player.y,'#ffd700',30,2);
+    if(bestTimes[currentLevelIdx]===null||elapsed<bestTimes[currentLevelIdx]){
+      bestTimes[currentLevelIdx]=elapsed;
+      document.getElementById('best').textContent=elapsed.toFixed(2);
+    }
+  }
+
+  const tX=player.x-W/2+player.w/2,tY=player.y-H*0.45;
+  const maxCX=COLS*T-W,maxCY=ROWS*T-H;
+  camera.x+=(Math.max(0,Math.min(maxCX,tX))-camera.x)*0.12;
+  camera.y+=(Math.max(0,Math.min(maxCY,tY))-camera.y)*0.12;
+}
+
+// ══════════════════════════════════════════════════════════════════
+// ── DESSIN ────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════
+function drawCloud(x,y,w,h,alpha){
+  ctx.save();ctx.globalAlpha=alpha;ctx.fillStyle='#e8f5e0';
+  ctx.beginPath();ctx.ellipse(x+w*0.5,y+h*0.55,w*0.5,h*0.4,0,0,Math.PI*2);ctx.fill();
+  ctx.beginPath();ctx.ellipse(x+w*0.3,y+h*0.45,w*0.3,h*0.38,0,0,Math.PI*2);ctx.fill();
+  ctx.beginPath();ctx.ellipse(x+w*0.72,y+h*0.5,w*0.28,h*0.32,0,0,Math.PI*2);ctx.fill();
+  ctx.restore();
+}
+
+function drawTileBlock(tx,ty,above){
+  if(currentTheme==='cavern')return drawTileBlockCavern(tx,ty,above);
+  const darkGrass='#4a7c3f',midGrass='#5a9448',lightGrass='#78b85c',topGrass='#96d46e',dirt='#8b6340',dirtDark='#6b4a2a';
+  if(above){
+    ctx.fillStyle=dirt;ctx.fillRect(tx,ty,T,T);
+    ctx.fillStyle=dirtDark;
+    ctx.fillRect(tx+2,ty+3,3,2);ctx.fillRect(tx+9,ty+8,4,2);ctx.fillRect(tx+5,ty+12,3,2);
+  } else {
+    ctx.fillStyle=midGrass;ctx.fillRect(tx,ty,T,T);
+    ctx.fillStyle=lightGrass;ctx.fillRect(tx,ty,T,5);
+    ctx.fillStyle=topGrass;ctx.fillRect(tx,ty,T,2);
+    ctx.fillStyle=darkGrass;ctx.fillRect(tx,ty+5,1,T-5);ctx.fillRect(tx+T-1,ty+5,1,T-5);
+    ctx.fillStyle=dirt;ctx.fillRect(tx,ty+10,T,6);
+    ctx.fillStyle='#b8e87c';ctx.fillRect(tx+1,ty,T-2,1);
+  }
+}
+
+// ── Bloc rocheux (thème caverne) ────────────────────────────────────
+function drawTileBlockCavern(tx,ty,above){
+  const rock='#4a4658',rockDark='#363248',rockLight='#5e5a70',crack='#2a2638';
+  if(above){
+    // bloc intérieur : roche dense
+    ctx.fillStyle=rockDark;ctx.fillRect(tx,ty,T,T);
+    ctx.fillStyle=crack;
+    ctx.fillRect(tx+2,ty+3,3,1);ctx.fillRect(tx+9,ty+8,4,1);ctx.fillRect(tx+5,ty+12,1,3);ctx.fillRect(tx+11,ty+2,1,4);
+  } else {
+    // surface exposée : roche claire avec arête lumineuse
+    ctx.fillStyle=rock;ctx.fillRect(tx,ty,T,T);
+    ctx.fillStyle=rockLight;ctx.fillRect(tx,ty,T,4);
+    ctx.fillStyle='#8a86a0';ctx.fillRect(tx+1,ty,T-2,1);
+    ctx.fillStyle=rockDark;ctx.fillRect(tx,ty+4,1,T-4);ctx.fillRect(tx+T-1,ty+4,1,T-4);
+    ctx.fillStyle=crack;ctx.fillRect(tx+6,ty+6,1,4);ctx.fillRect(tx+10,ty+10,2,1);
+  }
+}
+
+function drawDeco(d){
+  if(currentTheme==='cavern')return drawDecoCavern(d);
+  const dx=d.x-camera.x,dy=d.y-camera.y;
+  if(dx<-20||dx>W+20)return;
+  if(d.type==='grass'){
+    ctx.fillStyle=d.c;ctx.fillRect(dx,dy-d.h,1,d.h);
+    if(d.h>2)ctx.fillRect(dx-1,dy-d.h+1,1,1);
+  } else if(d.type==='flower'){
+    ctx.fillStyle='#5a9448';ctx.fillRect(dx,dy-5,1,5);
+    ctx.fillStyle=d.col;
+    ctx.fillRect(dx-1,dy-7,1,1);ctx.fillRect(dx+1,dy-7,1,1);
+    ctx.fillRect(dx,dy-8,1,1);ctx.fillRect(dx,dy-6,1,1);
+    ctx.fillStyle='#fff176';ctx.fillRect(dx,dy-7,1,1);
+  } else if(d.type==='rock'){
+    ctx.fillStyle='#7a7060';ctx.fillRect(dx,dy-3,4,3);
+    ctx.fillStyle='#9a9080';ctx.fillRect(dx,dy-3,4,1);
+    ctx.fillStyle='#5a5040';ctx.fillRect(dx+3,dy-2,1,2);
+  }
+}
+
+// ── Décoration caverne : stalagmites & minerais (fer/rubis/émeraude/saphir) ──
+function drawDecoCavern(d){
+  const dx=d.x-camera.x,dy=d.y-camera.y;
+  if(dx<-20||dx>W+20)return;
+  if(d.type==='stalagmite'){
+    ctx.fillStyle='#5e5a70';
+    ctx.beginPath();ctx.moveTo(dx-2,dy);ctx.lineTo(dx+2,dy);ctx.lineTo(dx,dy-d.h);ctx.closePath();ctx.fill();
+    ctx.fillStyle='#7a7690';ctx.beginPath();ctx.moveTo(dx-1,dy);ctx.lineTo(dx,dy-d.h);ctx.lineTo(dx,dy);ctx.closePath();ctx.fill();
+  } else if(d.type==='gem_top'){
+    const c=ORE_COLORS[d.ore];
+    // petite pousse cristalline émergeant de la roche
+    ctx.fillStyle=c.dark;
+    ctx.beginPath();ctx.moveTo(dx-2,dy);ctx.lineTo(dx+2,dy);ctx.lineTo(dx+1,dy-5);ctx.lineTo(dx-1,dy-6);ctx.closePath();ctx.fill();
+    ctx.fillStyle=c.main;
+    ctx.beginPath();ctx.moveTo(dx-1,dy-1);ctx.lineTo(dx+1,dy-1);ctx.lineTo(dx,dy-5);ctx.closePath();ctx.fill();
+    // étincelle
+    const tw=0.4+Math.sin(performance.now()*0.006+d.x)*0.3;
+    ctx.save();ctx.globalAlpha=Math.max(0,tw);
+    ctx.fillStyle=c.glow;ctx.fillRect(dx,dy-5,1,1);
+    ctx.restore();
+  } else if(d.type==='ore_vein'){
+    const c=ORE_COLORS[d.ore];
+    // petit amas de minerai incrusté dans la roche
+    ctx.fillStyle=c.dark;ctx.fillRect(dx-1,dy-1,4,3);
+    ctx.fillStyle=c.main;ctx.fillRect(dx,dy,2,2);ctx.fillRect(dx-1,dy+1,1,1);
+    const tw=0.5+Math.sin(performance.now()*0.005+d.x*1.3)*0.4;
+    ctx.save();ctx.globalAlpha=Math.max(0,tw);
+    ctx.fillStyle=c.glow;ctx.fillRect(dx,dy,1,1);
+    ctx.restore();
+  }
+}
+
+function drawBackground(){
+  if(currentTheme==='cavern')return drawBackgroundCavern();
+  const grad=ctx.createLinearGradient(0,0,0,H);
+  grad.addColorStop(0,'#a8d8a8');grad.addColorStop(0.5,'#c8efc8');grad.addColorStop(1,'#e8f8e0');
+  ctx.fillStyle=grad;ctx.fillRect(0,0,W,H);
+  const sunX=W*0.82,sunY=45;
+  ctx.fillStyle='rgba(255,235,80,0.9)';ctx.beginPath();ctx.arc(sunX,sunY,18,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='rgba(255,245,130,0.4)';ctx.beginPath();ctx.arc(sunX,sunY,26,0,Math.PI*2);ctx.fill();
+  CLOUD_DATA.forEach(cl=>{
+    const cx=((cl.x-camera.x*0.25+cloudOffset*cl.spd*50)%(COLS*T+200))-100;
+    drawCloud(cx,cl.y-camera.y*0.08,cl.w,cl.h,cl.alpha);
+  });
+  ctx.fillStyle='rgba(100,170,80,0.35)';
+  ctx.beginPath();const hoff=-(camera.x*0.18)%W;
+  for(let hx=-W;hx<W*2;hx++){const hy=H*0.72+Math.sin((hx+hoff)*0.012)*28+Math.sin((hx+hoff)*0.031)*14;if(hx===-W)ctx.moveTo(hx,hy);else ctx.lineTo(hx,hy);}
+  ctx.lineTo(W*2,H);ctx.lineTo(-W,H);ctx.closePath();ctx.fill();
+  ctx.fillStyle='rgba(80,150,60,0.28)';
+  ctx.beginPath();const hoff2=-(camera.x*0.12)%W;
+  for(let hx=-W;hx<W*2;hx++){const hy=H*0.78+Math.sin((hx+hoff2)*0.018)*20+Math.sin((hx+hoff2)*0.04)*10;if(hx===-W)ctx.moveTo(hx,hy);else ctx.lineTo(hx,hy);}
+  ctx.lineTo(W*2,H);ctx.lineTo(-W,H);ctx.closePath();ctx.fill();
+}
+
+// ── Fond thème caverne : roche profonde + lueur de minerai ──────────
+function drawGlowOrb(x,y,size,col,alpha){
+  ctx.save();ctx.globalAlpha=alpha;
+  ctx.fillStyle=col;
+  ctx.beginPath();ctx.arc(x,y,size*2.5,0,Math.PI*2);ctx.fill();
+  ctx.globalAlpha=Math.min(1,alpha*1.8);
+  ctx.beginPath();ctx.arc(x,y,size*0.7,0,Math.PI*2);ctx.fill();
+  ctx.restore();
+}
+
+function drawBackgroundCavern(){
+  // Dégradé profond : noir-violet en haut → gris-bleu en bas
+  const grad=ctx.createLinearGradient(0,0,0,H);
+  grad.addColorStop(0,'#0c0a16');
+  grad.addColorStop(0.5,'#1c1830');
+  grad.addColorStop(1,'#2e2a44');
+  ctx.fillStyle=grad;ctx.fillRect(0,0,W,H);
+
+  // Lueur chaude lointaine (filon de magma / forge profonde)
+  const lx=W*0.18,ly=H*0.85;
+  ctx.save();
+  const lavaGrad=ctx.createRadialGradient(lx,ly,0,lx,ly,90);
+  lavaGrad.addColorStop(0,'rgba(255,120,40,0.35)');
+  lavaGrad.addColorStop(1,'rgba(255,120,40,0)');
+  ctx.fillStyle=lavaGrad;ctx.fillRect(0,0,W,H);
+  ctx.restore();
+
+  // Poussières de minerai flottantes — supprimées
+
+  // Couches de roche lointaine (parallaxe), silhouettes anguleuses
+  ctx.fillStyle='rgba(60,54,90,0.45)';
+  ctx.beginPath();const hoff=-(camera.x*0.18)%W;
+  for(let hx=-W;hx<W*2;hx+=4){const hy=H*0.68+Math.abs(Math.sin((hx+hoff)*0.02))*36+Math.sin((hx+hoff)*0.05)*10;if(hx===-W)ctx.moveTo(hx,hy);else ctx.lineTo(hx,hy);}
+  ctx.lineTo(W*2,H);ctx.lineTo(-W,H);ctx.closePath();ctx.fill();
+
+  ctx.fillStyle='rgba(40,36,64,0.5)';
+  ctx.beginPath();const hoff2=-(camera.x*0.12)%W;
+  for(let hx=-W;hx<W*2;hx+=4){const hy=H*0.78+Math.abs(Math.sin((hx+hoff2)*0.035))*24+Math.sin((hx+hoff2)*0.07)*8;if(hx===-W)ctx.moveTo(hx,hy);else ctx.lineTo(hx,hy);}
+  ctx.lineTo(W*2,H);ctx.lineTo(-W,H);ctx.closePath();ctx.fill();
+
+  // Stalactites décoratives suspendues au plafond (parallaxe légère)
+  ctx.fillStyle='#221e36';
+  const stHoff=-(camera.x*0.4)%80;
+  for(let sx=stHoff-80;sx<W+80;sx+=46){
+    const sh=24+((sx*37)%23);
+    ctx.beginPath();ctx.moveTo(sx,0);ctx.lineTo(sx+14,0);ctx.lineTo(sx+7,sh);ctx.closePath();ctx.fill();
+  }
+}
+
+// ── Pic de roche (remplace les ronces en thème caverne) ─────────────
+function drawRockSpike(tx,ty){
+  ctx.fillStyle='#6a6a6a';
+  ctx.beginPath();ctx.moveTo(tx+1,ty+T);ctx.lineTo(tx+4,ty+3);ctx.lineTo(tx+7,ty+T);ctx.closePath();ctx.fill();
+  ctx.beginPath();ctx.moveTo(tx+7,ty+T);ctx.lineTo(tx+10,ty+1);ctx.lineTo(tx+13,ty+T);ctx.closePath();ctx.fill();
+  ctx.fillStyle='#d8d8d8';
+  ctx.beginPath();ctx.moveTo(tx+3,ty+T);ctx.lineTo(tx+4,ty+3);ctx.lineTo(tx+5,ty+T);ctx.closePath();ctx.fill();
+  ctx.beginPath();ctx.moveTo(tx+9,ty+T);ctx.lineTo(tx+10,ty+1);ctx.lineTo(tx+11,ty+T);ctx.closePath();ctx.fill();
+  // pointes : reflet blanc et ombre noire
+  ctx.fillStyle='#ffffff';
+  ctx.fillRect(tx+10,ty+1,1,1);ctx.fillRect(tx+4,ty+3,1,1);
+  ctx.fillStyle='#1a1a1a';
+  ctx.fillRect(tx+9,ty+2,1,1);ctx.fillRect(tx+3,ty+4,1,1);
+  // pointe rouge danger
+  ctx.fillStyle='#e0405a';
+  ctx.fillRect(tx+9,ty+1,1,1);ctx.fillRect(tx+3,ty+3,1,1);
+}
+
+function drawBramble(tx,ty){
+  const bx=tx,by=ty;
+  ctx.strokeStyle='#4a7a2a';ctx.lineWidth=2;ctx.lineCap='round';
+  ctx.beginPath();ctx.moveTo(bx+1,by+T-4);ctx.bezierCurveTo(bx+4,by+T-10,bx+12,by+T-10,bx+T-1,by+T-4);ctx.stroke();
+  ctx.strokeStyle='#3a6020';ctx.lineWidth=1.5;
+  ctx.beginPath();ctx.moveTo(bx+2,by+T-3);ctx.bezierCurveTo(bx+8,by+T-14,bx+10,by+T-8,bx+T-2,by+T-5);ctx.stroke();
+  ctx.strokeStyle='#2a4015';ctx.lineWidth=1;
+  [[2,T-6,-2,-5],[5,T-9,-3,-4],[8,T-11,2,-5],[11,T-8,3,-4],[14,T-7,-2,-4]].forEach(([ox,oy,dx,dy])=>{
+    ctx.beginPath();ctx.moveTo(bx+ox,by+oy);ctx.lineTo(bx+ox+dx,by+oy+dy);ctx.stroke();
+  });
+  ctx.fillStyle='#5a9a30';
+  [[3,T-8,3,2],[9,T-12,3,2],[13,T-9,3,2]].forEach(([ox,oy,rw,rh])=>{
+    ctx.beginPath();ctx.ellipse(bx+ox,by+oy,rw,rh,0.4,0,Math.PI*2);ctx.fill();
+  });
+}
+
+// ── Dessin bonhomme bâton générique ──────────────────────────────
+function drawStickFigure(px,py,facingRight,isMoving,bodyColor,withKnife){
+  const cx=px+4;
+  ctx.strokeStyle=bodyColor;ctx.fillStyle=bodyColor;
+  ctx.lineWidth=1.5;ctx.lineCap='round';
+  // Tête
+  ctx.beginPath();ctx.arc(cx,py+2,2.5,0,Math.PI*2);ctx.fill();
+  // Corps
+  ctx.beginPath();ctx.moveTo(cx,py+4.5);ctx.lineTo(cx,py+8);ctx.stroke();
+  // Jambes
+  const lp=isMoving?(Math.floor(performance.now()/120)%2===0?1:-1):0;
+  ctx.beginPath();ctx.moveTo(cx,py+8);ctx.lineTo(cx-2+lp,py+11);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(cx,py+8);ctx.lineTo(cx+2-lp,py+11);ctx.stroke();
+  // Bras
+  const ad=facingRight?1:-1;
+  ctx.beginPath();ctx.moveTo(cx,py+5.5);ctx.lineTo(cx+ad*3,py+7);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(cx,py+5.5);ctx.lineTo(cx-ad*2,py+7);ctx.stroke();
+  // Couteau fixe (pour les ennemis)
+  if(withKnife){
+    const kd=facingRight?1:-1;
+    // manche
+    ctx.strokeStyle='#5a3a1a';ctx.lineWidth=2;
+    ctx.beginPath();ctx.moveTo(cx+ad*3,py+7);ctx.lineTo(cx+ad*3+kd*3,py+6);ctx.stroke();
+    // lame
+    ctx.strokeStyle='#c0c0c0';ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(cx+ad*3+kd*3,py+6);ctx.lineTo(cx+ad*3+kd*7,py+4.5);ctx.stroke();
+    // reflet
+    ctx.strokeStyle='#ffffff';ctx.lineWidth=0.5;
+    ctx.beginPath();ctx.moveTo(cx+ad*3+kd*4,py+5.8);ctx.lineTo(cx+ad*3+kd*6.5,py+4.8);ctx.stroke();
+  }
+}
+
+function drawPortal(tx,ty){
+  const cx=tx+T/2,cy=ty+T/2,t=performance.now();
+  ctx.save();
+  // halo extérieur pulsant violet/bleu
+  ctx.globalAlpha=0.22+Math.sin(t*0.004)*0.1;
+  const haloGrad=ctx.createRadialGradient(cx,cy,1,cx,cy,8);
+  haloGrad.addColorStop(0,'#7c4dff');
+  haloGrad.addColorStop(0.6,'#3a5aff');
+  haloGrad.addColorStop(1,'rgba(60,40,255,0)');
+  ctx.fillStyle=haloGrad;
+  ctx.beginPath();ctx.arc(cx,cy,8,0,Math.PI*2);ctx.fill();
+  // anneau d'accrétion (bleu/violet)
+  ctx.globalAlpha=0.95;
+  const rot=t*0.0035;
+  for(let i=0;i<3;i++){
+    const a=rot+i*(Math.PI*2/3);
+    ctx.strokeStyle=i%2===0?'#8a6cff':'#4d7cff';
+    ctx.lineWidth=1.2;
+    ctx.beginPath();
+    ctx.ellipse(cx,cy,5,5.5,a,0,Math.PI*1.5);
+    ctx.stroke();
+  }
+  // horizon des événements : disque noir
+  ctx.globalAlpha=1;
+  ctx.fillStyle='#000000';
+  ctx.beginPath();ctx.arc(cx,cy,3.2,0,Math.PI*2);ctx.fill();
+  // léger reflet violet au centre
+  ctx.globalAlpha=0.5+Math.sin(t*0.006)*0.2;
+  ctx.fillStyle='#6a4cff';
+  ctx.beginPath();ctx.arc(cx,cy,1,0,Math.PI*2);ctx.fill();
+  ctx.restore();
+}
+
+function drawEnemies(){
+  for(const e of enemies){
+    const ex=Math.round(e.x-camera.x),ey=Math.round(e.y-camera.y);
+    // Légère aura rouge pour signaler le danger
+    ctx.save();
+    ctx.globalAlpha=0.18+Math.sin(performance.now()*0.004)*0.06;
+    ctx.fillStyle='#cc2200';
+    ctx.beginPath();ctx.arc(ex+4,ey+5,8,0,Math.PI*2);ctx.fill();
+    ctx.restore();
+    drawStickFigure(ex,ey,e.facingRight,true,'#1a0a0a',true);
+  }
+}
+
+function drawGame(){
+  drawBackground();
+  // Arbres — dessinés sans parallaxe pour coller aux blocs (thème prairie uniquement)
+  if(currentTheme!=='cavern')TREES.forEach(tr=>{
+    const tx=tr.x-camera.x,ty=tr.y-camera.y; // pas de parallaxe : ancré au sol
+    if(tx<-60||tx>W+60)return;
+    const trunkH=tr.trunk;
+    const trunkX=tx+tr.crown*0.4;
+    const trunkY=ty-trunkH; // tronc monte à partir du sommet du bloc
+    // tronc
+    ctx.fillStyle='#6b4a2a';ctx.fillRect(trunkX,trunkY,tr.crown*0.2,trunkH);
+    // feuillage centré au-dessus du tronc
+    const foliageX=tx+tr.crown*0.5;
+    const foliageY=trunkY;
+    ctx.fillStyle='#3a7d3a';ctx.beginPath();ctx.arc(foliageX,foliageY,tr.crown,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle='#4e9e4e';ctx.beginPath();ctx.arc(foliageX,foliageY-tr.crown*0.35,tr.crown*0.75,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle='#66b566';ctx.beginPath();ctx.arc(foliageX,foliageY-tr.crown*0.65,tr.crown*0.45,0,Math.PI*2);ctx.fill();
+  });
+  // Blocs
+  for(let r=0;r<ROWS;r++){
+    for(let c=0;c<(LEVEL[r]||'').length;c++){
+      const ch=LEVEL[r][c];
+      const tx=c*T-camera.x,ty=r*T-camera.y;
+      if(tx>-T-2&&tx<W+2&&ty>-T-2&&ty<H+2){
+        if(ch==='T')drawTileBlock(tx,ty,getTile(c,r-1));
+        if(ch==='S'){if(currentTheme==='cavern')drawRockSpike(tx,ty);else drawBramble(tx,ty);}
+        if(ch==='G'){
+          const hue=(performance.now()/8)%360;
+          ctx.fillStyle=`hsl(${hue},90%,65%)`;
+          ctx.beginPath();ctx.moveTo(tx+8,ty+2);ctx.lineTo(tx+13,ty+10);ctx.lineTo(tx+8,ty+8);ctx.lineTo(tx+3,ty+10);ctx.closePath();ctx.fill();
+          ctx.fillStyle='rgba(255,255,255,0.6)';ctx.fillRect(tx+4,ty+12,8,3);
+          ctx.save();ctx.globalAlpha=0.2+(Math.sin(performance.now()*0.006)*0.1);
+          ctx.fillStyle=`hsl(${hue},100%,70%)`;ctx.beginPath();ctx.arc(tx+8,ty+7,8,0,Math.PI*2);ctx.fill();
+          ctx.restore();
+        }
+      }
+    }
+  }
+  DECO.forEach(d=>drawDeco(d));
+  // Portails (apparence identique quel que soit leur identifiant)
+  for(const p of portals){
+    const tx=p.x-camera.x,ty=p.y-camera.y;
+    if(tx>-T-4&&tx<W+4&&ty>-T-4&&ty<H+4)drawPortal(tx,ty);
+  }
+  // Plateformes
+  for(const mp of movPlats){
+    const tx=mp.x-camera.x,ty=mp.y-camera.y;
+    ctx.fillStyle='#7c5c2a';ctx.fillRect(tx,ty,mp.w,mp.h);
+    ctx.fillStyle='#a07840';ctx.fillRect(tx,ty,mp.w,3);
+    ctx.fillStyle='#5a3f18';ctx.fillRect(tx,ty+mp.h-2,mp.w,2);
+    ctx.fillStyle='#78b85c';ctx.fillRect(tx,ty,mp.w,2);
+    ctx.fillStyle='#96d46e';ctx.fillRect(tx+1,ty,mp.w-2,1);
+  }
+  // Ennemis
+  drawEnemies();
+  // Particules
+  particles.forEach(p=>{
+    ctx.globalAlpha=p.life/p.maxLife;ctx.fillStyle=p.color;
+    ctx.beginPath();ctx.arc(p.x-camera.x,p.y-camera.y,p.r*(0.5+p.life/p.maxLife*0.5),0,Math.PI*2);ctx.fill();
+  });
+  ctx.globalAlpha=1;
+  // Joueur
+  if(state==='playing'&&!player.dead){
+    const px=Math.round(player.x-camera.x),py=Math.round(player.y-camera.y);
+    const bodyColor=player.dashing?'#ff9f43':'#111111';
+    drawStickFigure(px,py,player.facingRight,Math.abs(player.vx)>0.2,bodyColor,false);
+    if(!player.canDash&&!player.dashing){
+      ctx.fillStyle='rgba(233,69,96,0.25)';ctx.beginPath();ctx.arc(px+4,py+5,6,0,Math.PI*2);ctx.fill();
+    }
+    if(player.onWall!==0&&!player.onGround&&player.vy>0){
+      ctx.fillStyle='rgba(255,255,255,0.3)';
+      ctx.fillRect(player.onWall>0?px+8:px-3,py+2,3,6);
+    }
+  }
+}
+
+// ── Écrans ────────────────────────────────────────────────────────
+function drawTitle(){
+  drawBackground();
+  ctx.fillStyle='rgba(20,40,15,0.55)';ctx.fillRect(0,0,W,H);
+  ctx.font='bold 48px monospace';ctx.textAlign='center';
+  ctx.fillStyle='#2d5a1b';ctx.fillText('CELESTE',W/2+2,H/2-48+2);
+  ctx.fillStyle='#96d46e';ctx.fillText('CELESTE',W/2,H/2-48);
+  ctx.font='13px monospace';ctx.fillStyle='#a8d8a8';
+  ctx.fillText('— Niveau 1 : La Prairie —',W/2,H/2-18);
+  ctx.font='11px monospace';ctx.fillStyle='#6a9a6a';
+  ['← → Déplacer','Z / Espace  Sauter','X  Dash (8 directions)','Mur + ↑  Wall-jump'].forEach((t,i)=>ctx.fillText(t,W/2,H/2+16+i*17));
+  if(Math.floor(performance.now()/500)%2){ctx.fillStyle='#78b85c';ctx.font='14px monospace';ctx.fillText('▶  Appuie sur Espace pour jouer',W/2,H/2+100);}
+  ctx.textAlign='left';
+}
+
+function drawLevelWon(){
+  drawGame();
+  ctx.fillStyle='rgba(10,30,10,0.78)';ctx.fillRect(0,0,W,H);
+  // Particules victoire
+  particles.forEach(p=>{
+    ctx.globalAlpha=p.life/p.maxLife;ctx.fillStyle=p.color;
+    ctx.beginPath();ctx.arc(p.x-camera.x,p.y-camera.y,p.r,0,Math.PI*2);ctx.fill();
+  });
+  ctx.globalAlpha=1;
+  ctx.textAlign='center';
+  ctx.font='bold 30px monospace';ctx.fillStyle='#ffd700';
+  ctx.fillText('🌿 NIVEAU '+(currentLevelIdx+1)+' TERMINÉ !',W/2,H/2-50);
+  ctx.font='14px monospace';ctx.fillStyle='#c8f0a8';
+  ctx.fillText('Temps : '+elapsed.toFixed(2)+'s',W/2,H/2-16);
+  ctx.fillText('Morts : '+deaths,W/2,H/2+10);
+  const bt=bestTimes[currentLevelIdx];
+  if(bt!==null){ctx.fillStyle='#ffd700';ctx.fillText('Meilleur : '+bt.toFixed(2)+'s',W/2,H/2+36);}
+  // Aperçu niveau suivant
+  ctx.font='13px monospace';ctx.fillStyle='#a8e0a8';
+  ctx.fillText('Prochain : '+LEVEL_DEFS[currentLevelIdx+1].name,W/2,H/2+68);
+  if(Math.floor(performance.now()/500)%2){ctx.fillStyle='#78b85c';ctx.font='14px monospace';ctx.fillText('▶  Espace pour continuer',W/2,H/2+96);}
+  ctx.textAlign='left';
+}
+
+function drawWon(){
+  drawBackground();
+  ctx.fillStyle='rgba(10,30,10,0.72)';ctx.fillRect(0,0,W,H);
+  particles.forEach(p=>{
+    ctx.globalAlpha=p.life/p.maxLife;ctx.fillStyle=p.color;
+    ctx.beginPath();ctx.arc(p.x-camera.x,p.y-camera.y,p.r,0,Math.PI*2);ctx.fill();
+  });
+  ctx.globalAlpha=1;
+  ctx.textAlign='center';
+  ctx.font='bold 34px monospace';ctx.fillStyle='#ffd700';ctx.fillText('🏆 TOUS LES NIVEAUX !',W/2,H/2-40);
+  ctx.font='15px monospace';ctx.fillStyle='#c8f0a8';
+  ctx.fillText('Temps total : '+elapsed.toFixed(2)+'s',W/2,H/2);
+  ctx.fillText('Morts total : '+deaths,W/2,H/2+24);
+  ctx.font='12px monospace';ctx.fillStyle='#789a78';ctx.fillText('R pour recommencer',W/2,H/2+60);
+  ctx.textAlign='left';
+}
+
+// ── Boucle ────────────────────────────────────────────────────────
+let last=0;
+function loop(ts){
+  if(ts-last>=16){
+    last=ts;update();
+    if(state==='title')drawTitle();
+    else if(state==='levelwon')drawLevelWon();
+    else if(state==='won')drawWon();
+    else drawGame();
+  }
+  requestAnimationFrame(loop);
+}
+
+// Init
+loadLevel(0);
+state='title';
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

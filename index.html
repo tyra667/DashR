@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Celeste — Prairie</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{width:100%;min-height:100%;background:#0f1f0f;font-family:'Courier New',monospace;}
+
+  /* ===== Layout général : 3 colonnes (pub | jeu | pub) ===== */
+  #layout{
+    display:flex;
+    min-height:100vh;
+    align-items:center;
+    justify-content:center;
+    gap:10px;
+    padding:10px;
+  }
+
+  /* ===== Colonnes publicitaires ===== */
+  .ad-col{
+    flex:0 0 auto;
+    width:160px;          /* taille standard "Wide Skyscraper" 160x600 */
+    min-height:600px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    background:rgba(255,255,255,0.03);
+    border:1px dashed #334433;
+    color:#556655;
+    font-size:12px;
+    text-align:center;
+    border-radius:6px;
+  }
+
+  /* Sur petits écrans, on cache les pubs latérales pour ne pas gêner le jeu */
+  @media (max-width: 1100px){
+    .ad-col{display:none;}
+  }
+
+  /* ===== Colonne centrale = le jeu ===== */
+  #game-col{
+    flex:0 0 auto;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+  }
+
+  #game-frame{
+    border:none;
+    width:480px;
+    height:760px;
+    max-width:100vw;
+    max-height:90vh;
+    background:#0f1f0f;
+  }
+
+  /* ===== Bandeau pub en bas sur mobile ===== */
+  #ad-bottom{
+    display:none;
+    width:100%;
+    max-width:480px;
+    min-height:90px;
+    margin-top:10px;
+    background:rgba(255,255,255,0.03);
+    border:1px dashed #334433;
+    color:#556655;
+    font-size:12px;
+    align-items:center;
+    justify-content:center;
+    border-radius:6px;
+  }
+  @media (max-width: 1100px){
+    #ad-bottom{display:flex;}
+  }
+
+  footer{
+    text-align:center;
+    color:#445544;
+    font-size:11px;
+    padding:8px;
+  }
+</style>
+</head>
+<body>
+
+<div id="layout">
+
+  <!-- ===== PUB GAUCHE ===== -->
+  <div class="ad-col" id="ad-left">
+    <!-- ===================================================
+         EMPLACEMENT PUB N°1 (colonne gauche, 160x600)
+         Remplace ce commentaire par ton code AdSense
+         (voir le fichier instructions.md)
+    ==================================================== -->
+    Publicité
+  </div>
+
+  <!-- ===== JEU ===== -->
+  <div id="game-col">
+    <iframe id="game-frame" src="game.html" title="Celeste Prairie"></iframe>
+    <div id="ad-bottom">
+      <!-- ===================================================
+           EMPLACEMENT PUB MOBILE (bannière 320x90 ou responsive)
+      ==================================================== -->
+      Publicité
+    </div>
+    <footer>Jeu créé par Bastien — Celeste Prairie</footer>
+  </div>
+
+  <!-- ===== PUB DROITE ===== -->
+  <div class="ad-col" id="ad-right">
+    <!-- ===================================================
+         EMPLACEMENT PUB N°2 (colonne droite, 160x600)
+    ==================================================== -->
+    Publicité
+  </div>
+
+</div>
+
+</body>
+</html>
