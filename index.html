@@ -20,13 +20,6 @@
 <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-1905225691499317" crossorigin="anonymous"></script>
 <meta name="google-adsense-account" content="ca-pub-1905225691499317">
 
-<!-- Redirect mobile directly to game -->
-<script>
-  if(window.matchMedia('(pointer:coarse)').matches){
-    window.location.replace('game.html');
-  }
-</script>
-
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
 
@@ -121,8 +114,6 @@ nav a:hover{color:#96d46e;}
 #arcade-bezel::before{top:6px;left:6px;border-right:none;border-bottom:none;}
 #arcade-bezel::after{bottom:6px;right:6px;border-left:none;border-top:none;}
 
-#game-frame{border:none;display:block;width:640px;height:506px;border-radius:2px;}
-
 /* LEDs */
 #leds{display:flex;gap:5px;justify-content:center;}
 .led{width:6px;height:6px;border-radius:1px;animation:led-pulse 1.8s ease-in-out infinite;}
@@ -173,7 +164,19 @@ nav a:hover{color:#96d46e;}
 /* Ad between content */
 #ad-mid{display:flex;justify-content:center;margin:20px 0;}
 
-/* Pub mobile */
+/* ── Mobile : iframe responsive ── */
+@media(max-width:700px){
+  #layout{padding:8px 4px;gap:6px;}
+  #arcade-title{font-size:18px;letter-spacing:4px;}
+  #arcade-bezel{padding:6px;}
+  #game-frame{width:100%;height:auto;aspect-ratio:640/506;max-width:100%;}
+  #score-bar{font-size:6px;gap:10px;}
+  #content-section{padding:20px 12px 10px;}
+  .controls-grid{grid-template-columns:1fr;}
+  .levels-list{grid-template-columns:1fr;}
+  #ad-mid{display:none;} /* pas de pub mid sur petit écran */
+}
+/* Colonnes pub */
 #ad-bottom{
   display:none;width:100%;max-width:480px;min-height:70px;
   background:#0d0d0d;border:1px solid #1e1e1e;
@@ -238,7 +241,7 @@ footer a:hover{color:#96d46e;}
     </div>
 
     <div id="arcade-bezel">
-      <iframe id="game-frame" src="game.html" title="DashR — Free Online Platformer Game" scrolling="no"></iframe>
+      <iframe id="game-frame" src="game.html" title="DashR — Free Online Platformer Game" scrolling="no" style="border:none;display:block;width:640px;height:506px;max-width:100%;border-radius:2px;"></iframe>
     </div>
 
     <div id="leds">

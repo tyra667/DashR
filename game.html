@@ -98,6 +98,29 @@ canvas{display:block;image-rendering:pixelated;image-rendering:crisp-edges;curso
   #hud{font-size:11px;}
   html,body{height:100%;overflow:hidden;}
 }
+/* Landscape mobile : pad sur les côtés, HUD minuscule */
+@media(pointer:coarse) and (orientation:landscape){
+  #hud{font-size:9px;padding:2px 0;}
+  #hud span{padding:1px 6px;}
+  #pad{
+    height:100%;width:100%;
+    pointer-events:none;
+  }
+  /* Joystick à gauche, boutons à droite — sur toute la hauteur */
+  #stick-zone{
+    left:8px;bottom:auto;top:50%;transform:translateY(-50%);
+    width:100px;height:100px;
+  }
+  #stick-bg{width:100px;height:100px;}
+  #stick-knob{width:36px;height:36px;top:32px;left:32px;}
+  #btns{
+    right:8px;bottom:auto;top:50%;transform:translateY(-50%);
+    flex-direction:column;gap:6px;
+  }
+  /* Laisser de la place sur les côtés pour le pad */
+  #gc{flex-direction:row;flex-wrap:wrap;}
+  #canvas-wrap{flex:1;}
+}
 </style>
 </head>
 <body>
@@ -135,6 +158,37 @@ canvas{display:block;image-rendering:pixelated;image-rendering:crisp-edges;curso
     </div>
   </div>
 </div>
+
+<!-- Overlay saisie pseudo natif (mobile) -->
+<div id="name-overlay" style="
+  display:none;position:fixed;inset:0;z-index:200;
+  background:rgba(0,0,0,0.82);
+  display:none;flex-direction:column;align-items:center;justify-content:center;
+  gap:14px;font-family:'Courier New',monospace;
+">
+  <div style="color:#96d46e;font-size:13px;letter-spacing:2px;text-align:center;">ENTRER TON PSEUDO</div>
+  <input id="name-native" type="text" maxlength="16" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+    style="
+      background:#0d1f0d;border:2px solid #78d450;border-radius:4px;
+      color:#c8f0a8;font-family:'Courier New',monospace;font-size:18px;
+      text-align:center;padding:10px 16px;width:240px;outline:none;
+      -webkit-appearance:none;
+    ">
+  <div style="color:#3a6a3a;font-size:10px;text-align:center;">Max 16 caractères</div>
+  <div style="display:flex;gap:12px;">
+    <button id="name-cancel" style="
+      background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.2);
+      color:#888;font-family:'Courier New',monospace;font-size:12px;
+      padding:8px 18px;border-radius:4px;cursor:pointer;
+    ">ANNULER</button>
+    <button id="name-confirm" style="
+      background:rgba(150,212,110,0.15);border:1px solid #96d46e;
+      color:#96d46e;font-family:'Courier New',monospace;font-size:12px;
+      padding:8px 18px;border-radius:4px;cursor:pointer;
+    ">OK</button>
+  </div>
+</div>
+
 <script>
 const C=document.getElementById('c');
 const ctx=C.getContext('2d');
@@ -142,12 +196,22 @@ const BASE_W=640,BASE_H=420;
 let W=BASE_W,H=BASE_H,SCALE=1;
 function resize(){
   const isMobile=window.matchMedia('(pointer:coarse)').matches;
-  const padH=isMobile?150:0;
+  const isLandscape=window.innerWidth>window.innerHeight;
   const hudH=document.getElementById('hud').offsetHeight||32;
-  // visualViewport évite les barres d'adresse mobiles qui faussent innerHeight
   const vvh=(window.visualViewport?window.visualViewport.height:window.innerHeight);
-  const availW=window.innerWidth;
-  const availH=vvh-hudH-padH-4;
+  const vvw=(window.visualViewport?window.visualViewport.width:window.innerWidth);
+  let availW,availH;
+  if(isMobile && isLandscape){
+    // En paysage : pad sur les côtés (120px chacun), toute la hauteur moins HUD
+    const padSide=120;
+    availW=vvw-padSide*2;
+    availH=vvh-hudH-4;
+  } else {
+    // Portrait ou desktop : pad en bas
+    const padH=isMobile?150:0;
+    availW=vvw;
+    availH=vvh-hudH-padH-4;
+  }
   const sw=availW/BASE_W,sh=availH/BASE_H;
   SCALE=Math.min(sw,sh);W=BASE_W;H=BASE_H;
   C.width=BASE_W;C.height=BASE_H;
@@ -1532,10 +1596,17 @@ window.addEventListener('keyup',e=>{ if(nameInputActive) return; keys[e.code]=fa
   const btnMenu=document.getElementById('btn-menu');
   btnMenu.addEventListener('touchstart',e=>{
     e.preventDefault();
-    if(state==='title') return;
-    // Simuler Escape : retour au menu titre
+    if(state==='title'){
+      // Dans un sous-menu → retour au menu principal
+      if(menuState!=='main'){ menuState='main'; menuCursor=0; startThemeMusic('title'); }
+      return;
+    }
+    // En jeu → retour au menu titre
+    ghostMode=false;
+    fadeAlpha=1;fadeDir=-1;fadePending=null;
     state='title';
     menuState='main';menuCursor=0;
+    updateThemeStyle&&updateThemeStyle();
     startThemeMusic('title');
   },{passive:false});
 
@@ -2860,10 +2931,51 @@ function drawNameInput(){
 
 let nameInputCallback = null; // fonction appelée après confirmation du nom
 
+// Overlay natif (mobile)
+(function(){
+  const overlay=document.getElementById('name-overlay');
+  const inp=document.getElementById('name-native');
+  const btnOk=document.getElementById('name-confirm');
+  const btnCancel=document.getElementById('name-cancel');
+  function closeOverlay(confirm){
+    overlay.style.display='none';
+    if(confirm && inp.value.trim().length>0){
+      playerName=inp.value.trim().slice(0,16);
+      localStorage.setItem('dashr_name',playerName);
+      nameInputActive=false;
+      const cb=nameInputCallback; nameInputCallback=null;
+      if(cb) cb();
+      else if(menuState==='leaderboard') lbLoad();
+    } else {
+      nameInputActive=false;
+      nameInputCallback=null;
+    }
+    Object.keys(keys).forEach(k=>keys[k]=false);
+  }
+  btnOk.addEventListener('click',()=>closeOverlay(true));
+  btnOk.addEventListener('touchend',e=>{e.preventDefault();closeOverlay(true);});
+  btnCancel.addEventListener('click',()=>closeOverlay(false));
+  btnCancel.addEventListener('touchend',e=>{e.preventDefault();closeOverlay(false);});
+  inp.addEventListener('keydown',e=>{
+    if(e.key==='Enter'){e.preventDefault();closeOverlay(true);}
+    if(e.key==='Escape'){e.preventDefault();closeOverlay(false);}
+  });
+  window._openNativeNameInput=function(onConfirm){
+    nameInputCallback=onConfirm||null;
+    inp.value=playerName||'';
+    overlay.style.display='flex';
+    setTimeout(()=>inp.focus(),80);
+  };
+})();
+
 function openNameInput(onConfirm){
-  nameInputActive  = true;
-  nameInputValue   = playerName || '';
-  nameInputCallback = onConfirm || null;
+  const isMobile=window.matchMedia('(pointer:coarse)').matches;
+  nameInputActive=true;
+  nameInputValue=playerName||'';
+  nameInputCallback=onConfirm||null;
+  if(isMobile && window._openNativeNameInput){
+    window._openNativeNameInput(onConfirm);
+  }
 }
 
 function handleNameInput(e){
