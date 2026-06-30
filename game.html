@@ -3391,7 +3391,7 @@ function loop(ts){
     if(box){box.style.display='block';box.textContent='[LOOP ERROR] '+err.message+'\n'+err.stack;}
   }
   var hb=document.getElementById('debug-hb');
-  if(hb)hb.textContent='loop ok | W='+W+' H='+H+' state='+state+' menuState='+menuState+' C.w='+C.width+' C.h='+C.height+' ts='+Math.floor(ts);
+  if(hb)hb.textContent='coarse='+window.matchMedia('(pointer:coarse)').matches+' touch='+('ontouchstart' in window)+' gcH='+document.getElementById('gc').offsetHeight+' hudH='+document.getElementById('hud').offsetHeight+' padDisp='+getComputedStyle(document.getElementById('pad')).display+' innerH='+window.innerHeight+' vvH='+(window.visualViewport?Math.round(window.visualViewport.height):'-');
   requestAnimationFrame(loop);
 }
 
