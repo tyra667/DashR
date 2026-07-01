@@ -98,6 +98,34 @@ html.is-touch #ctrl{display:none;}
 html.is-touch #hud{font-size:11px;}
 html.is-touch,html.is-touch body{height:100%;overflow:hidden;}
 /* Landscape mobile : on garde la même disposition qu'en portrait (pad en bas, plein écran) */
+
+/* ── Mode plein écran paysage ── */
+:fullscreen #gc,
+:-webkit-full-screen #gc{
+  width:100vw;height:100vh;
+  background:#000;
+}
+:fullscreen #canvas-wrap,
+:-webkit-full-screen #canvas-wrap{
+  flex:1;width:100%;height:100%;
+}
+:fullscreen #hud,
+:-webkit-full-screen #hud{
+  font-size:8px;padding:2px 0;
+}
+:fullscreen #pad,
+:-webkit-full-screen #pad{
+  display:block !important;
+  height:180px;
+}
+:fullscreen #stick-zone,
+:-webkit-full-screen #stick-zone{
+  left:18px;bottom:18px;
+}
+:fullscreen #btns,
+:-webkit-full-screen #btns{
+  right:18px;bottom:18px;
+}
 </style>
 </head>
 <body>
@@ -149,6 +177,7 @@ window.addEventListener('unhandledrejection', function(e){
       <div id="btn-dash" class="btn" style="position:absolute;bottom:0;right:94px;">✦</div>
       <div id="btn-restart" class="btn" style="position:absolute;top:0;right:0;width:46px;height:46px;font-size:12px;">↺</div>
       <div id="btn-menu" class="btn" style="position:absolute;top:0;left:0;width:46px;height:46px;font-size:11px;background:rgba(255,255,255,0.07);border-color:rgba(255,255,255,0.2);">☰</div>
+      <div id="btn-fs" class="btn" style="position:absolute;top:54px;left:0;width:46px;height:46px;font-size:14px;background:rgba(150,212,110,0.15);border-color:rgba(150,212,110,0.45);">⛶</div>
     </div>
   </div>
 </div>
@@ -1576,6 +1605,41 @@ window.addEventListener('keyup',e=>{ if(nameInputActive) return; keys[e.code]=fa
       else startGame();
     }
   },{passive:false});
+
+  // ── Bouton PLEIN ÉCRAN PAYSAGE ──
+  const btnFs=document.getElementById('btn-fs');
+  btnFs.addEventListener('touchstart',e=>{
+    e.preventDefault();
+    const el=document.documentElement;
+    if(!document.fullscreenElement){
+      // Passe en plein écran puis tourne en paysage
+      const req=el.requestFullscreen||el.webkitRequestFullscreen||el.mozRequestFullScreen;
+      if(req){
+        req.call(el).then(()=>{
+          // Verrouiller en paysage
+          const so=screen.orientation||screen.msLockOrientation;
+          if(screen.orientation&&screen.orientation.lock){
+            screen.orientation.lock('landscape').catch(()=>{});
+          }
+        }).catch(()=>{});
+      }
+      btnFs.textContent='✕';
+      btnFs.title='Quitter plein écran';
+    } else {
+      // Quitter le plein écran
+      const exit=document.exitFullscreen||document.webkitExitFullscreen||document.mozCancelFullScreen;
+      if(exit) exit.call(document).catch(()=>{});
+      if(screen.orientation&&screen.orientation.unlock) screen.orientation.unlock();
+      btnFs.textContent='⛶';
+    }
+  },{passive:false});
+
+  document.addEventListener('fullscreenchange',()=>{
+    if(!document.fullscreenElement){
+      btnFs.textContent='⛶';
+      if(screen.orientation&&screen.orientation.unlock) screen.orientation.unlock();
+    }
+  });
 
   // Bouton MENU (Échap mobile)
   const btnMenu=document.getElementById('btn-menu');
