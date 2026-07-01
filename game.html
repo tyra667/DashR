@@ -166,8 +166,8 @@ window.addEventListener('unhandledrejection', function(e){
 
 <!-- Manette virtuelle (mobile uniquement) -->
 <div id="pad">
-  <!-- Bouton plein écran — coin supérieur droit du pad -->
-  <div id="btn-fs" class="btn" style="position:absolute;top:8px;right:8px;width:46px;height:46px;font-size:14px;z-index:60;background:rgba(150,212,110,0.15);border-color:rgba(150,212,110,0.45);">⛶</div>
+  <!-- Bouton plein écran — coin supérieur gauche, au-dessus du joystick -->
+  <div id="btn-fs" class="btn" style="position:absolute;bottom:188px;left:18px;width:46px;height:46px;font-size:14px;z-index:60;background:rgba(150,212,110,0.15);border-color:rgba(150,212,110,0.45);">⛶</div>
   <div id="stick-zone">
     <div id="stick-bg"></div>
     <div id="stick-knob"></div>
@@ -1542,11 +1542,11 @@ window.addEventListener('keyup',e=>{ if(nameInputActive) return; keys[e.code]=fa
     const norm=RADIUS*0.4;
     keys['ArrowLeft']= dx<-norm;
     keys['ArrowRight']=dx> norm;
-    keys['ArrowUp']=   dy<-norm;
-    keys['ArrowDown']=  dy> norm;
+    // Axe vertical ignoré sur mobile : le dash reste gauche/droite uniquement
+    // (ArrowUp/Down ne sont plus settés par le joystick)
   }
   function resetStick(){
-    keys['ArrowLeft']=keys['ArrowRight']=keys['ArrowUp']=keys['ArrowDown']=false;
+    keys['ArrowLeft']=keys['ArrowRight']=false;
     knob.style.transform='translate(0,0)';stickActive=false;stickId=null;
   }
 
@@ -1699,7 +1699,9 @@ window.addEventListener('keyup',e=>{ if(nameInputActive) return; keys[e.code]=fa
             // Tap gauche/droite du panel
             if(cx<W/2) settings[key]=Math.max(0,+(settings[key]-0.1).toFixed(1));
             else settings[key]=Math.min(1,+(settings[key]+0.1).toFixed(1));
-            if(key==='ambientVolume'||key==='masterVolume'){updateAmbientVolume&&updateAmbientVolume();}
+            if(key==='ambientVolume'||key==='masterVolume'){
+              musicNodes.forEach(n=>{if(n instanceof GainNode){try{n.gain.setTargetAtTime(getMusicVol(),getACtx().currentTime,0.1);}catch(e){}}});
+            }
           }
         }
       });
@@ -1719,6 +1721,7 @@ window.addEventListener('keyup',e=>{ if(nameInputActive) return; keys[e.code]=fa
         if(cx>=x0&&cx<=x1&&cy>=y0&&cy<=y1){
           dressingCursor=i;
           selectedColorIdx=i;
+          applyPlayerColor(i);
           localStorage.setItem('dashr_colorIdx',i);
           hit=true;break;
         }
